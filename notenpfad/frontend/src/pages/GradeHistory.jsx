@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import GradeList from '../components/GradeList';
 
-const API_URL = 'http://localhost:8000';
+import { API_BASE_URL as API_URL } from '../config';
 
 const GradeHistory = ({ studentId, onBack }) => {
     const [grades, setGrades] = useState([]);

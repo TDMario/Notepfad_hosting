@@ -12,7 +12,7 @@ import {
 import AddGradeModal from '../components/AddGradeModal';
 import GradeList from '../components/GradeList';
 
-const API_URL = 'http://localhost:8000';
+import { API_BASE_URL as API_URL } from '../config';
 
 const Dashboard = ({ studentId, onSelectSubject, onViewHistory }) => {
     const [stats, setStats] = useState(null); // Changed from average number to stats object
@@ -22,7 +22,9 @@ const Dashboard = ({ studentId, onSelectSubject, onViewHistory }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     useEffect(() => {
-        fetchData();
+        if (studentId) {
+            fetchData();
+        }
     }, [studentId]);
 
     const fetchData = async () => {
@@ -95,6 +97,17 @@ const Dashboard = ({ studentId, onSelectSubject, onViewHistory }) => {
     const overallAverage = stats?.average || 0;
     const passed = stats?.passed || false;
     const details = stats?.details;
+
+    if (!studentId) {
+        return (
+            <div className="container animate-fade-in" style={{ paddingBottom: '80px', textAlign: 'center', marginTop: '4rem' }}>
+                <div className="card">
+                    <h2>👋 Willkommen!</h2>
+                    <p>Bitte wähle im Menü "Kinder" ein Kind aus, um dessen Noten zu sehen.</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="container animate-fade-in" style={{ paddingBottom: '80px' }}>

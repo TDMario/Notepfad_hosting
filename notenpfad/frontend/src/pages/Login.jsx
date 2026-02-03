@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 
+import { API_BASE_URL } from '../config';
+
 const Login = ({ onLogin }) => {
     const [isRegistering, setIsRegistering] = useState(false);
     const [username, setUsername] = useState('');
@@ -19,7 +21,7 @@ const Login = ({ onLogin }) => {
         const endpoint = isRegistering ? '/register' : '/login';
 
         try {
-            const response = await fetch(`http://127.0.0.1:8000${endpoint}`, {
+            const response = await fetch(`${API_BASE_URL}${endpoint}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

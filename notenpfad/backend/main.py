@@ -6,6 +6,7 @@ from typing import List, Optional
 from datetime import date
 from passlib.context import CryptContext
 import models, database
+import os
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -16,7 +17,7 @@ app = FastAPI(title="Notenpfad API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all for dev
+    allow_origins=[os.getenv("FRONTEND_URL", "*")], # Allow all for dev or specific for prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -123,7 +124,7 @@ def startup_event():
         admin = db.query(models.User).filter(models.User.username == "admin").first()
         if not admin:
             print("Creating default admin user")
-            hashed_password = get_password_hash("1234")
+            hashed_password = get_password_hash(os.getenv("ADMIN_PASSWORD", "1234"))
             admin = models.User(username="admin", password_hash=hashed_password, role="parent")
             db.add(admin)
             db.commit()
@@ -133,7 +134,7 @@ def startup_event():
         sole = db.query(models.User).filter(models.User.username == "sole").first()
         if not sole:
             print("Creating default student user: sole")
-            hashed_sole_pw = get_password_hash("sun26")
+            hashed_sole_pw = get_password_hash(os.getenv("STUDENT_PASSWORD", "sun26"))
             sole = models.User(username="sole", password_hash=hashed_sole_pw, role="student", parent_id=admin.id)
             db.add(sole)
             db.commit()

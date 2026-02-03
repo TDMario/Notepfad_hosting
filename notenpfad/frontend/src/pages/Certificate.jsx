@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = 'http://localhost:8000';
+import { API_BASE_URL as API_URL } from '../config';
 
 const Certificate = ({ studentId }) => {
     const [stats, setStats] = useState([]);

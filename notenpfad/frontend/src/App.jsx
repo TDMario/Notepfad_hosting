@@ -55,7 +55,7 @@ function App() {
 
   // Determine current student ID (either my own linked student profile, or the child's)
   // If I am a student, I am my own student. If I am parent viewing child, use child's student_id.
-  const currentStudentId = viewingChild?.student_profile?.id || user?.student_id || 1;
+  const currentStudentId = viewingChild?.student_profile?.id || user?.student_id;
 
   const renderView = () => {
     switch (view) {
