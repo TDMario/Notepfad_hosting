@@ -149,6 +149,30 @@ def startup_event():
              db.add(student_profile)
              db.commit()
 
+        # 4. Create Default Subjects and Topics
+        default_data = {
+            "Mathematik": ["Grundoperationen", "Geometrie", "Textaufgaben"],
+            "Deutsch": ["Grammatik", "Rechtschreibung", "Textverständnis"]
+        }
+
+        for sub_name, topics in default_data.items():
+            # Ensure Subject
+            subject = db.query(models.Subject).filter(models.Subject.name == sub_name).first()
+            if not subject:
+                print(f"Creating default subject: {sub_name}")
+                subject = models.Subject(name=sub_name, weighting=1.0)
+                db.add(subject)
+                db.commit()
+                db.refresh(subject)
+            
+            # Ensure Topics
+            existing_topic_count = db.query(models.Topic).filter(models.Topic.subject_id == subject.id).count()
+            if existing_topic_count == 0:
+                print(f"Seeding default topics for {sub_name}")
+                for topic_name in topics:
+                    db.add(models.Topic(name=topic_name, subject_id=subject.id, is_completed=0))
+                db.commit()
+
     finally:
         db.close()
 
