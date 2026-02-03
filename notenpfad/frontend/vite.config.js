@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   preview: {
-    allowedHosts: true,
+    allowedHosts: ['notepfadfrontend-production.up.railway.app'],
   },
   server: {
     host: true, // Listen on all addresses
