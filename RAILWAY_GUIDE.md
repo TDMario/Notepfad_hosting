@@ -31,7 +31,7 @@ Go to the **Variables** tab in the Backend service and add:
 - `ADMIN_PASSWORD`: (Choose a secure password)
 - `STUDENT_PASSWORD`: (Choose a secure password)
 - `FRONTEND_URL`: `https://<YOUR-FRONTEND-URL>.up.railway.app` (You will get this URL in Step 3, leave it as `*` for now if unsure).
-- `PORT`: Railway sets this automatically, do not set it manually.
+- `PORT`: **DO NOT ADD THIS VARIABLE**. Railway sets this automatically in the background. If you added it, please **delete** it.
 
 ## Step 3: Add Database (PostgreSQL)
 
