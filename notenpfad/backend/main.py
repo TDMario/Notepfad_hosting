@@ -7,11 +7,21 @@ from datetime import date
 from passlib.context import CryptContext
 import models, database
 import os
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
 
 models.Base.metadata.create_all(bind=database.engine)
 
 
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+# JWT Configuration
+SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-me") # In production, use a secure key!
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours
 
 app = FastAPI(title="Notenpfad API")
 
@@ -36,6 +46,36 @@ def verify_password(plain_password, hashed_password):
 
 def get_password_hash(password):
     return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if user is None:
+        raise credentials_exception
+    return user
 
 # --- Pydantic Schemas ---
 class GradeBase(BaseModel):
@@ -105,6 +145,17 @@ class Subject(SubjectBase):
     grades: List[Grade] = []
     class Config:
         orm_mode = True
+
+    class Config:
+        orm_mode = True
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user_id: int
+    username: str
+    role: str
+    student_id: Optional[int] = None
 
 # --- Endpoints ---
 
@@ -204,7 +255,7 @@ def create_student(user: UserStudentCreate, db: Session = Depends(get_db)):
     db.refresh(new_user)
     return new_user
 
-@app.post("/login")
+@app.post("/login", response_model=Token)
 def login(user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.password_hash):
@@ -216,8 +267,15 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     if db_user.student_profile:
         student_id = db_user.student_profile.id
 
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": db_user.username, "role": db_user.role, "id": db_user.id},
+        expires_delta=access_token_expires
+    )
+
     return {
-        "message": "Login successful", 
+        "access_token": access_token,
+        "token_type": "bearer",
         "user_id": db_user.id, 
         "username": db_user.username,
         "role": db_user.role,
@@ -225,8 +283,12 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     }
 
 @app.post("/users/children", response_model=UserOut)
-def create_child(child: ChildCreate, db: Session = Depends(get_db)):
-    # Check parent exists
+def create_child(child: ChildCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Check parent exists (using current_user for security)
+    if current_user.id != child.parent_id and current_user.role != 'admin':
+         # Allow admins or the parent themselves
+         raise HTTPException(status_code=403, detail="Not authorized to create child for this user")
+
     parent = db.query(models.User).filter(models.User.id == child.parent_id).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent not found")
@@ -249,16 +311,24 @@ def create_child(child: ChildCreate, db: Session = Depends(get_db)):
     return new_user
 
 @app.get("/users/{user_id}/children", response_model=List[ChildOut])
-def get_children(user_id: int, db: Session = Depends(get_db)):
+def get_children(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Ensure user can only see their own children
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
     children = db.query(models.User).filter(models.User.parent_id == user_id).all()
     return children
 
 @app.delete("/users/children/{child_id}")
-def delete_child(child_id: int, db: Session = Depends(get_db)):
+def delete_child(child_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # 1. Find User
     user = db.query(models.User).filter(models.User.id == child_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Authorize: Only parent can delete their child
+    if user.parent_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this user")
     
     # 2. Check if it is a child/student
     if user.role != "student":
@@ -279,7 +349,10 @@ def delete_child(child_id: int, db: Session = Depends(get_db)):
     return {"message": "Child deleted successfully"}
 
 @app.put("/users/{user_id}/password")
-def update_password(user_id: int, user_update: UserPasswordUpdate, db: Session = Depends(get_db)):
+def update_password(user_id: int, user_update: UserPasswordUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -290,7 +363,7 @@ def update_password(user_id: int, user_update: UserPasswordUpdate, db: Session =
     return {"message": "Password updated successfully"}
 
 @app.post("/subjects/", response_model=Subject)
-def create_subject(subject: SubjectCreate, db: Session = Depends(get_db)):
+def create_subject(subject: SubjectCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_subject = models.Subject(name=subject.name, weighting=subject.weighting)
     db.add(db_subject)
     db.commit()
@@ -298,12 +371,12 @@ def create_subject(subject: SubjectCreate, db: Session = Depends(get_db)):
     return db_subject
 
 @app.get("/subjects/", response_model=List[Subject])
-def read_subjects(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_subjects(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     subjects = db.query(models.Subject).offset(skip).limit(limit).all()
     return subjects
 
 @app.delete("/subjects/{subject_id}")
-def delete_subject(subject_id: int, db: Session = Depends(get_db)):
+def delete_subject(subject_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
@@ -316,11 +389,27 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db)):
     return {"message": "Subject and associated grades deleted"}
 
 @app.post("/grades/", response_model=Grade)
-def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(get_db)):
+def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # Check if student exists
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    
+    # Authorized?
+    # 1. Student adding their own grade
+    # 2. Parent adding grade for their child
+    
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+
+    # If current_user is a student, they must be the student_id
+    if current_user.role == "student":
+        if current_user.student_profile and current_user.student_profile.id != student_id:
+             raise HTTPException(status_code=403, detail="Cannot add grades for other students")
+    
+    # If current_user is a parent, the student must be their child
+    if current_user.role == "parent":
+         child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+         if not child_user or child_user.parent_id != current_user.id:
+              raise HTTPException(status_code=403, detail="Not authorized to add grades for this student")
     
     db_grade = models.Grade(**grade.dict(), student_id=student_id)
     db.add(db_grade)
@@ -329,12 +418,29 @@ def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(
     return db_grade
 
 @app.get("/grades/", response_model=List[Grade])
-def read_grades(student_id: int = 1, db: Session = Depends(get_db)):
+def read_grades(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auth Check
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        # If no student found, return empty or 404. 
+        # But we should check auth first if possible.
+        pass
+
+    # Simplified Auth Check similar to create_grade
+    if current_user.role == "student":
+        if current_user.student_profile and current_user.student_profile.id != student_id:
+             raise HTTPException(status_code=403, detail="Cannot view grades for other students")
+    
+    if current_user.role == "parent":
+         child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+         if not child_user or child_user.parent_id != current_user.id:
+              raise HTTPException(status_code=403, detail="Not authorized to view grades for this student")
+
     grades = db.query(models.Grade).filter(models.Grade.student_id == student_id).all()
     return grades
 
 @app.delete("/grades/{grade_id}")
-def delete_grade(grade_id: int, db: Session = Depends(get_db)):
+def delete_grade(grade_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     grade = db.query(models.Grade).filter(models.Grade.id == grade_id).first()
     if not grade:
         raise HTTPException(status_code=404, detail="Grade not found")
@@ -344,7 +450,19 @@ def delete_grade(grade_id: int, db: Session = Depends(get_db)):
     return {"message": "Grade deleted"}
 
 @app.get("/average/")
-def calculate_average(student_id: int = 1, db: Session = Depends(get_db)):
+def calculate_average(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+     # Auth Check (Same as read_grades)
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    
+    if current_user.role == "student":
+        if current_user.student_profile and current_user.student_profile.id != student_id:
+             raise HTTPException(status_code=403, detail="Cannot view grades for other students")
+    
+    if current_user.role == "parent":
+         child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+         if not child_user or child_user.parent_id != current_user.id:
+              raise HTTPException(status_code=403, detail="Not authorized to view grades for this student")
+
     # Calculate Gymi Score based on specific rules
     grades = db.query(models.Grade).filter(models.Grade.student_id == student_id).all()
     
@@ -458,7 +576,7 @@ class Topic(TopicBase):
         from_attributes = True
 
 @app.post("/topics/", response_model=Topic)
-def create_topic(topic: TopicCreate, db: Session = Depends(get_db)):
+def create_topic(topic: TopicCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_topic = models.Topic(name=topic.name, is_completed=topic.is_completed, subject_id=topic.subject_id)
     db.add(db_topic)
     db.commit()
@@ -466,7 +584,7 @@ def create_topic(topic: TopicCreate, db: Session = Depends(get_db)):
     return db_topic
 
 @app.put("/topics/{topic_id}/toggle", response_model=Topic)
-def toggle_topic(topic_id: int, db: Session = Depends(get_db)):
+def toggle_topic(topic_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     topic = db.query(models.Topic).filter(models.Topic.id == topic_id).first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -488,7 +606,19 @@ class PredictionRequest(BaseModel):
     next_exam_weight: float = 1.0
 
 @app.post("/prediction")
-def predict_grade(request: PredictionRequest, student_id: int = 1, db: Session = Depends(get_db)):
+def predict_grade(request: PredictionRequest, student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auth Check (Same as read_grades)
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    
+    if current_user.role == "student":
+        if current_user.student_profile and current_user.student_profile.id != student_id:
+             raise HTTPException(status_code=403, detail="Cannot view grades for other students")
+    
+    if current_user.role == "parent":
+         child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+         if not child_user or child_user.parent_id != current_user.id:
+              raise HTTPException(status_code=403, detail="Not authorized to view grades for this student")
+
     # 1. Calculate current state
     grades = db.query(models.Grade).filter(models.Grade.student_id == student_id).all()
     
@@ -543,7 +673,9 @@ def chat_bot(request: ChatRequest):
         return {"response": "Das ist interessant. Erzähl mir mehr oder frag mich nach einem bestimmten Fach."}
 
 @app.post("/reset")
-def reset_demo(student_id: int = 1, db: Session = Depends(get_db)):
+def reset_demo(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Only admin/parent can reset? For now, open but authenticated
+    
     # Delete all grades for student
     db.query(models.Grade).filter(models.Grade.student_id == student_id).delete()
     

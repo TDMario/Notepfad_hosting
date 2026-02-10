@@ -28,6 +28,9 @@ function App() {
   const handleLogin = (userData) => {
     setUser(userData);
     localStorage.setItem('user', JSON.stringify(userData));
+    if (userData.access_token) {
+      localStorage.setItem('access_token', userData.access_token);
+    }
     setView('dashboard');
   };
 
@@ -35,6 +38,7 @@ function App() {
     setUser(null);
     setViewingChild(null);
     localStorage.removeItem('user');
+    localStorage.removeItem('access_token');
     setView('dashboard');
   };
 

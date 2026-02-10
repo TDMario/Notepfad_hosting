@@ -27,7 +27,20 @@ const ChatBot = () => {
         try {
             const res = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                }, // Unprotected endpoint as per analysis, but let's check. 
+                // Wait, chat endpoint in main.py is NOT protected.
+                // @app.post("/chat") ...
+                // So I don't need to add header here if I didn't protect it.
+                // But good practice to verify.
+                // The task list said "Protect /grades/, /subjects/, /users/".
+                // I didn't explicitly check /chat in the plan, but I should probably leave it open or protect it.
+                // Let's check main.py again.
+                // In main.py: @app.post("/chat") def chat_bot ... no dependency.
+                // So no change needed for ChatBot.jsx unless I want to protect it.
+                // I'll skip ChatBot.jsx for now or protect it in main.py if I want consistency.
+                // Given the plan defined specific endpoints, I'll stick to the plan.
                 body: JSON.stringify({ message: input })
             });
             const data = await res.json();
