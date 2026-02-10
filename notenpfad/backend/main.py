@@ -170,35 +170,44 @@ def health_check():
 @app.on_event("startup")
 def startup_event():
     db = database.SessionLocal()
+    print("--- STARTUP SEEDING CHECK ---", flush=True)
     try:
         # 1. Create Admin (Parent)
         admin = db.query(models.User).filter(models.User.username == "admin").first()
         if not admin:
-            print("Creating default admin user")
+            print("Creating default admin user...", flush=True)
             hashed_password = get_password_hash(os.getenv("ADMIN_PASSWORD", "1234"))
             admin = models.User(username="admin", password_hash=hashed_password, role="parent")
             db.add(admin)
             db.commit()
             db.refresh(admin)
+            print("✅ Default admin created.", flush=True)
+        else:
+            print("ℹ️ Admin user already exists.", flush=True)
         
         # 2. Create Sole (Student) linked to Admin
         sole = db.query(models.User).filter(models.User.username == "sole").first()
         if not sole:
-            print("Creating default student user: sole")
+            print("Creating default student user: sole...", flush=True)
             hashed_sole_pw = get_password_hash(os.getenv("STUDENT_PASSWORD", "sun26"))
             sole = models.User(username="sole", password_hash=hashed_sole_pw, role="student", parent_id=admin.id)
             db.add(sole)
             db.commit()
             db.refresh(sole)
+            print("✅ Default student 'sole' created.", flush=True)
+        else:
+            print("ℹ️ Student 'sole' already exists.", flush=True)
 
         # 3. Create Student Profile for Sole (if not exists)
-        # Check if Linked Student Profile exists
         student_profile = db.query(models.Student).filter(models.Student.user_id == sole.id).first()
         if not student_profile:
-             print("Creating student profile for sole")
+             print("Creating student profile for sole...", flush=True)
              student_profile = models.Student(name="Sole Iovanna", target_school="Gymnasium", user_id=sole.id)
              db.add(student_profile)
              db.commit()
+             print("✅ Student profile for 'sole' created.", flush=True)
+        else:
+             print("ℹ️ Student profile for 'sole' already exists.", flush=True)
 
         # 4. Create Default Subjects and Topics
         default_data = {
@@ -210,22 +219,65 @@ def startup_event():
             # Ensure Subject
             subject = db.query(models.Subject).filter(models.Subject.name == sub_name).first()
             if not subject:
-                print(f"Creating default subject: {sub_name}")
+                print(f"Creating default subject: {sub_name}...", flush=True)
                 subject = models.Subject(name=sub_name, weighting=1.0)
                 db.add(subject)
                 db.commit()
                 db.refresh(subject)
+                print(f"✅ Subject '{sub_name}' created.", flush=True)
+            else:
+                print(f"ℹ️ Subject '{sub_name}' already exists.", flush=True)
             
             # Ensure Topics
             existing_topic_count = db.query(models.Topic).filter(models.Topic.subject_id == subject.id).count()
             if existing_topic_count == 0:
-                print(f"Seeding default topics for {sub_name}")
+                print(f"Seeding default topics for {sub_name}...", flush=True)
                 for topic_name in topics:
                     db.add(models.Topic(name=topic_name, subject_id=subject.id, is_completed=0))
                 db.commit()
+                print(f"✅ Topics for '{sub_name}' seeded.", flush=True)
+            else:
+                print(f"ℹ️ Topics for '{sub_name}' already exist ({existing_topic_count}).", flush=True)
+        
+        print("--- SEEDING COMPLETE ---", flush=True)
 
+    except Exception as e:
+        print(f"❌ Error during startup seeding: {e}", flush=True)
+        # Don't raise, allow app to start even if seeding fails
     finally:
         db.close()
+
+@app.get("/debug/db-status")
+def debug_db_status(db: Session = Depends(get_db)):
+    """Debug endpoint to check DB content state"""
+    try:
+        user_count = db.query(models.User).count()
+        student_count = db.query(models.Student).count()
+        subject_count = db.query(models.Subject).count()
+        grade_count = db.query(models.Grade).count()
+        
+        admin_exists = db.query(models.User).filter(models.User.username == "admin").first() is not None
+        sole_exists = db.query(models.User).filter(models.User.username == "sole").first() is not None
+        
+        subjects = [s.name for s in db.query(models.Subject).all()]
+        
+        return {
+            "status": "online",
+            "counts": {
+                "users": user_count,
+                "students": student_count,
+                "subjects": subject_count,
+                "grades": grade_count
+            },
+            "checks": {
+                "admin_exists": admin_exists,
+                "sole_exists": sole_exists,
+                "subject_names": subjects
+            },
+            "db_url_masked": str(database.engine.url).split("@")[-1] if "@" in str(database.engine.url) else "..."
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 @app.post("/register", response_model=UserOut)
 def register(user: UserCreate, db: Session = Depends(get_db)):
