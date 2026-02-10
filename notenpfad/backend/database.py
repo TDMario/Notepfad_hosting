@@ -5,6 +5,17 @@ import os
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./database.db")
 
+# Debug Logging
+print("--- DATABASE CONFIGURATION ---")
+if "sqlite" in SQLALCHEMY_DATABASE_URL:
+    print("WARNING: Using SQLite database! This is ephemeral on Railway.")
+    print(f"Database Path: {SQLALCHEMY_DATABASE_URL}")
+else:
+    print("INFO: Using remote database connection.")
+    # Mask password for logs
+    safe_url = SQLALCHEMY_DATABASE_URL.split("@")[-1] if "@" in SQLALCHEMY_DATABASE_URL else "..."
+    print(f"Target: ...@{safe_url}")
+
 # SQLAlchemy requires postgresql:// but Railway provides postgres://
 if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
