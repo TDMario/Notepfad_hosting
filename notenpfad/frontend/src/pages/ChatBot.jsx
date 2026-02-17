@@ -21,6 +21,16 @@ const ChatBot = ({ studentId, userRole }) => {
 
     useEffect(scrollToBottom, [messages]);
 
+    // Reset chat when switching context (student or role)
+    useEffect(() => {
+        const newInitMsg = userRole === 'parent'
+            ? 'Willkommen! Ich helfe Ihnen, die schulische Entwicklung Ihres Kindes zu verstehen. 🤝'
+            : 'Hallo! Ich bin dein Lern-Coach. Wie kann ich dir heute helfen? 🤖';
+
+        setMessages([{ sender: 'bot', text: newInitMsg }]);
+        setInput('');
+    }, [studentId, userRole]);
+
     const handleSend = async () => {
         if (!input.trim()) return;
 
