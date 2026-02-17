@@ -77,6 +77,7 @@ const ChatBot = ({ studentId, userRole }) => {
                 {messages.map((msg, index) => (
                     <div
                         key={index}
+                        className={msg.sender === 'user' ? 'chat-bubble-user' : 'chat-bubble-bot'}
                         style={{
                             alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
                             background: msg.sender === 'user' ? 'var(--color-primary)' : 'white',
