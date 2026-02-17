@@ -17,8 +17,9 @@ class Subject(Base):
     __tablename__ = "subjects"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String, index=True)
     weighting = Column(Float, default=1.0)
+    owner_id = Column(Integer, ForeignKey("users.id")) # Scoped to a user (parent)
 
     grades = relationship("Grade", back_populates="subject")
     topics = relationship("Topic", back_populates="subject")

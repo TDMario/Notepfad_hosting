@@ -19,6 +19,10 @@ models.Base.metadata.create_all(bind=database.engine)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
+import random
+import string
+import secrets
+
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-me") # In production, use a secure key!
 ALGORITHM = "HS256"
@@ -218,10 +222,18 @@ def startup_event():
 
         for sub_name, topics in default_data.items():
             # Ensure Subject
-            subject = db.query(models.Subject).filter(models.Subject.name == sub_name).first()
+            # Check if this subject exists for global admin/template usage? 
+            # Or just check if *any* exists? 
+            # For startup seeding, let's assign them to the admin user we just fetched/created.
+            
+            subject = db.query(models.Subject).filter(
+                models.Subject.name == sub_name, 
+                models.Subject.owner_id == admin.id
+            ).first()
+            
             if not subject:
-                print(f"Creating default subject: {sub_name}...", flush=True)
-                subject = models.Subject(name=sub_name, weighting=1.0)
+                print(f"Creating default subject for admin: {sub_name}...", flush=True)
+                subject = models.Subject(name=sub_name, weighting=1.0, owner_id=admin.id)
                 db.add(subject)
                 db.commit()
                 db.refresh(subject)
@@ -335,6 +347,92 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
         "student_id": student_id
     }
 
+@app.post("/guest-login", response_model=Token)
+def guest_login(db: Session = Depends(get_db)):
+    """
+    Creates a temporary guest account with seeded data and logs in immediately.
+    """
+    # 1. Create unique guest user
+    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    username = f"guest_{suffix}"
+    password = secrets.token_urlsafe(8)
+    hashed_password = get_password_hash(password)
+    
+    guest_parent = models.User(username=username, password_hash=hashed_password, role="parent")
+    db.add(guest_parent)
+    db.commit()
+    db.refresh(guest_parent)
+    
+    # 2. Create generic child
+    child_names = ["Alex", "Leo", "Mia", "Zoé", "Noah", "Luca"]
+    child_name = random.choice(child_names) 
+    child_username = f"student_{suffix}"
+    child_pw = get_password_hash("1234") # Simple pw for them if they need it
+    
+    guest_child = models.User(username=child_username, password_hash=child_pw, role="student", parent_id=guest_parent.id)
+    db.add(guest_child)
+    db.commit()
+    db.refresh(guest_child)
+    
+    student_profile = models.Student(name=child_name, target_school="Gymnasium", user_id=guest_child.id)
+    db.add(student_profile)
+    db.commit()
+    db.refresh(student_profile)
+    
+    # 3. Seed Subjects & Grades (Isolated to this parent)
+    # Define Subjects
+    subjects_data = {
+        "Mathematik": {"weight": 1.0, "topics": ["Grundoperationen", "Geometrie", "Textaufgaben"]},
+        "Deutsch": {"weight": 1.0, "topics": ["Grammatik", "Rechtschreibung", "Textverständnis"]}
+    }
+    
+    for sub_name, details in subjects_data.items():
+        # Create Subject linked to Parent
+        subject = models.Subject(name=sub_name, weighting=details["weight"], owner_id=guest_parent.id)
+        db.add(subject)
+        db.commit()
+        db.refresh(subject)
+        
+        # Create Topics (Global topics linked to subject, status is currently global per subject id)
+        for topic_name in details["topics"]:
+             # Random completion
+             is_done = random.choice([True, False])
+             db.add(models.Topic(name=topic_name, subject_id=subject.id, is_completed=1 if is_done else 0))
+        
+        # Create Random Grades
+        # Add a few grades
+        for _ in range(random.randint(2, 4)):
+            val = round(random.uniform(3.5, 6.0), 1)
+            # 50% chance of 'Prüfung' or 'Vornote'
+            g_type = random.choice(["Prüfung", "Vornote", "Test"])
+            
+            grade = models.Grade(
+                value=val,
+                subject_id=subject.id,
+                student_id=student_profile.id,
+                type=g_type,
+                date=date.today()
+            )
+            db.add(grade)
+            
+    db.commit()
+    
+    # 4. Generate Token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": guest_parent.username, "role": guest_parent.role, "id": guest_parent.id},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": guest_parent.id,
+        "username": guest_parent.username,
+        "role": guest_parent.role,
+        "student_id": None 
+    }
+
 @app.post("/users/children", response_model=UserOut)
 def create_child(child: ChildCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # Check parent exists (using current_user for security)
@@ -417,7 +515,12 @@ def update_password(user_id: int, user_update: UserPasswordUpdate, db: Session =
 
 @app.post("/subjects/", response_model=Subject)
 def create_subject(subject: SubjectCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    db_subject = models.Subject(name=subject.name, weighting=subject.weighting)
+    # Scope to current user (if parent) or parent (if student)
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+        
+    db_subject = models.Subject(name=subject.name, weighting=subject.weighting, owner_id=owner_id)
     db.add(db_subject)
     db.commit()
     db.refresh(db_subject)
@@ -425,7 +528,12 @@ def create_subject(subject: SubjectCreate, db: Session = Depends(get_db), curren
 
 @app.get("/subjects/", response_model=List[Subject])
 def read_subjects(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    subjects = db.query(models.Subject).offset(skip).limit(limit).all()
+    # Filter by owner_id
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+        
+    subjects = db.query(models.Subject).filter(models.Subject.owner_id == owner_id).offset(skip).limit(limit).all()
     return subjects
 
 @app.delete("/subjects/{subject_id}")
@@ -433,7 +541,15 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db), current_user:
     subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
+        
+    # Check ownership
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
     
+    if subject.owner_id != owner_id and current_user.role != 'admin': # Admin override
+         raise HTTPException(status_code=403, detail="Not authorized to delete this subject")
+
     # Manually delete grades associated with this subject (safeguard for SQLite/no-cascade)
     db.query(models.Grade).filter(models.Grade.subject_id == subject_id).delete()
     
