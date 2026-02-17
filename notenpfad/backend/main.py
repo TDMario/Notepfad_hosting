@@ -10,6 +10,7 @@ import os
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+import openai
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -707,22 +708,121 @@ def predict_grade(request: PredictionRequest, student_id: int = 1, db: Session =
 
 class ChatRequest(BaseModel):
     message: str
+    student_id: Optional[int] = None
+
+def get_student_context(student_id: int, db: Session):
+    """
+    Fetches relevant student data to build a context string for the AI.
+    """
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        return "Student not found."
+
+    # Fetch subjects and grades
+    subjects = db.query(models.Subject).all()
+    grades = db.query(models.Grade).filter(models.Grade.student_id == student_id).all()
+    
+    # Organize grades by subject
+    subject_context = []
+    for subject in subjects:
+        subj_grades = [g.value for g in grades if g.subject_id == subject.id]
+        avg = sum(subj_grades) / len(subj_grades) if subj_grades else 0.0
+        avg_str = f"{avg:.2f}" if subj_grades else "No grades yet"
+        subject_context.append(f"- {subject.name}: Average {avg_str} (Grades: {subj_grades})")
+    
+    # Fetch Topics
+    topics = db.query(models.Topic).join(models.Subject).all() # This fetches all topics, filter by student?
+    # Topics are global definitions, but completion is specific? 
+    # Wait, models.Topic has 'is_completed' column.
+    # Checking models.py: Topic.is_completed is an Integer column on the Topic table itself.
+    # This implies Topics are NOT per student currently in this simple schema, but shared/global state 
+    # OR the schema meant for single user demo. 
+    # Given the 'reset' endpoint resets all topics, it seems topics are shared or single-instance.
+    # We will just list them as is.
+    
+    topic_context = []
+    for t in topics:
+        status = "[x]" if t.is_completed else "[ ]"
+        topic_context.append(f"{status} {t.name} ({t.subject.name if t.subject else 'Unknown'})")
+    
+    context_str = f"""
+    Student Name: {student.name}
+    Target School: {student.target_school}
+    
+    Academic Performance:
+    {chr(10).join(subject_context)}
+    
+    Learning Topics Status:
+    {chr(10).join(topic_context)}
+    """
+    return context_str
 
 @app.post("/chat")
-def chat_bot(request: ChatRequest):
-    msg = request.message.lower()
+def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # 1. Determine Student ID
+    target_student_id = None
     
-    # Simple keyword-based mocked AI for now
-    if "hallo" in msg:
-        return {"response": "Hi! Bereit zum Lernen? 📚"}
-    elif "mathe" in msg:
-        return {"response": "Mathe kann knifflig sein. Probiere es mit Übungsaufgaben zu Brüchen!"}
-    elif "deutsch" in msg:
-        return {"response": "Für Deutsch empfehle ich: Lesen, Lesen, Lesen! 📖"}
-    elif "prüfung" in msg:
-        return {"response": "Keine Panik vor der Prüfung. Atme tief durch und geh Schritt für Schritt vor."}
+    if request.student_id:
+        # Client requested specific student check auth
+        if current_user.role == "student":
+            if current_user.student_profile and current_user.student_profile.id == request.student_id:
+                target_student_id = request.student_id
+        elif current_user.role == "parent":
+             # Check if child belongs to parent
+             # Need to find the user associated with this student_id
+             student = db.query(models.Student).filter(models.Student.id == request.student_id).first()
+             if student:
+                 child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+                 if child_user and child_user.parent_id == current_user.id:
+                     target_student_id = request.student_id
     else:
-        return {"response": "Das ist interessant. Erzähl mir mehr oder frag mich nach einem bestimmten Fach."}
+        # Fallback / Default
+        if current_user.role == "student" and current_user.student_profile:
+            target_student_id = current_user.student_profile.id
+            
+    if not target_student_id:
+        # If we can't context, just chat generically or error?
+        # Let's try to proceed with generic chat but warn or just generic.
+        pass
+
+    # 2. Build Context
+    context = ""
+    if target_student_id:
+        context = get_student_context(target_student_id, db)
+    
+    # 3. Call OpenAI
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+         return {"response": "Brain not connected (API Key missing)."}
+
+    client = openai.OpenAI(api_key=api_key)
+    
+    system_prompt = f"""You are a helpful, encouraging learning coach for a student.
+    Your goal is to help them learn, reflect on their grades, and prepare for exams.
+    
+    Current Student Context:
+    {context}
+    
+    Instructions:
+    - Be friendly and age-appropriate (for school kids).
+    - Use the grades context to give specific advice (e.g. "Math looks great, but let's practice German").
+    - Do NOT give direct answers to homework questions, but guide them.
+    - If the user is a parent (checked via role if passed, but assume student context for now), give insights.
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request.message}
+            ]
+        )
+        return {"response": completion.choices[0].message.content}
+    except Exception as e:
+        print(f"OpenAI Error: {e}")
+        return {"response": "Entschuldigung, ich bin gerade etwas verwirrt. Versuche es später nochmal."}
+
 
 @app.post("/reset")
 def reset_demo(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
