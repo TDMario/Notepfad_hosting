@@ -838,11 +838,19 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
 
     formatting_instruction = "\nIMPORTANT: Format your response using Markdown. Use **bold** for emphasis, lists for readability, and headers (###) for sections."
 
+    gym_exam_context = """
+    GOAL: Prepare the student for the 'Gymnasiumsaufnahmeprüfung' (Swiss Gymnasium Entrance Exam).
+    - Focus on core subjects: Mathematics and German (and potentially French/English).
+    - When asked for exercises, suggest tasks typical for Swiss Gymi exams (e.g., text analysis in German, geometry/word problems in Math).
+    - Motivate the student for this specific high-stakes goal.
+    """
+
     if current_user.role == "parent":
         system_prompt = f"""You are a helpful education advisor for a parent.
-        Your goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions.
+        Your goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions to help the child pass the Gymnasium Entrance Exam.
         
         {grading_system_context}
+        {gym_exam_context}
         {formatting_instruction}
         
         Child's Current Context:
@@ -858,9 +866,10 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     else:
         # Default to student "Lern-Coach"
         system_prompt = f"""You are a helpful, encouraging learning coach for a student.
-        Your goal is to help them learn, reflect on their grades, and prepare for exams.
+        Your goal is to help them learn, reflect on their grades, and prepare for the Gymnasium Entrance Exam.
         
         {grading_system_context}
+        {gym_exam_context}
         {formatting_instruction}
         
         Current Student Context:
