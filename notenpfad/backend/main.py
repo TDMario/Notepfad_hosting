@@ -787,7 +787,33 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
 
     # 2. Build Context
     context = ""
-    if target_student_id:
+    
+    if current_user.role == "parent":
+        # Parent Context: Fetch ALL children
+        children_users = db.query(models.User).filter(models.User.parent_id == current_user.id).all()
+        
+        if not children_users:
+            context = "No children linked to this parent account."
+        else:
+            context_parts = []
+            for child_user in children_users:
+                # Get student profile for this child
+                student_profile = db.query(models.Student).filter(models.Student.user_id == child_user.id).first()
+                if student_profile:
+                    child_context = get_student_context(student_profile.id, db)
+                    # Add a header for the child
+                    context_parts.append(f"--- Child: {student_profile.name} (ID: {student_profile.id}) ---\n{child_context}")
+            
+            context = "Here is the data for your children:\n\n" + "\n\n".join(context_parts)
+            
+            if target_student_id:
+                # If a specific child was selected, mention it
+                selected_student = db.query(models.Student).filter(models.Student.id == target_student_id).first()
+                if selected_student:
+                    context = f"CURRENTLY VIEWING: {selected_student.name}\n\n" + context
+    
+    elif target_student_id:
+        # Student Context (Single)
         context = get_student_context(target_student_id, db)
     
     # 3. Call OpenAI
