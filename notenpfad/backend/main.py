@@ -825,9 +825,22 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     
     system_prompt = ""
     
+    grading_system_context = """
+    IMPORTANT - GRADING SYSTEM (Swiss Standard):
+    - Scale: 1.0 to 6.0
+    - 6.0 = Excellent / Best possible grade
+    - 5.0 = Good
+    - 4.0 = Sufficient (Pass)
+    - Below 4.0 = Insufficient (Fail)
+    - 1.0 = Worst possible grade
+    PLEASE INTERPRET ALL GRADES ACCORDING TO THIS SYSTEM. A 5.5 is amazing, a 2.5 is very bad.
+    """
+
     if current_user.role == "parent":
         system_prompt = f"""You are a helpful education advisor for a parent.
         Your goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions.
+        
+        {grading_system_context}
         
         Child's Current Context:
         {context}
@@ -843,6 +856,8 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
         # Default to student "Lern-Coach"
         system_prompt = f"""You are a helpful, encouraging learning coach for a student.
         Your goal is to help them learn, reflect on their grades, and prepare for exams.
+        
+        {grading_system_context}
         
         Current Student Context:
         {context}
