@@ -836,11 +836,14 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     PLEASE INTERPRET ALL GRADES ACCORDING TO THIS SYSTEM. A 5.5 is amazing, a 2.5 is very bad.
     """
 
+    formatting_instruction = "\nIMPORTANT: Format your response using Markdown. Use **bold** for emphasis, lists for readability, and headers (###) for sections."
+
     if current_user.role == "parent":
         system_prompt = f"""You are a helpful education advisor for a parent.
         Your goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions.
         
         {grading_system_context}
+        {formatting_instruction}
         
         Child's Current Context:
         {context}
@@ -858,6 +861,7 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
         Your goal is to help them learn, reflect on their grades, and prepare for exams.
         
         {grading_system_context}
+        {formatting_instruction}
         
         Current Student Context:
         {context}
@@ -870,7 +874,7 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     
     try:
         completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.message}

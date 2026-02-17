@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-
+import ReactMarkdown from 'react-markdown';
 import { API_BASE_URL as API_URL } from '../config';
 
 const ChatBot = ({ studentId, userRole }) => {
@@ -89,7 +89,9 @@ const ChatBot = ({ studentId, userRole }) => {
                             boxShadow: 'var(--shadow-sm)'
                         }}
                     >
-                        {msg.text}
+                        <ReactMarkdown>
+                            {msg.text}
+                        </ReactMarkdown>
                     </div>
                 ))}
                 {isLoading && <div style={{ alignSelf: 'flex-start', color: '#888', fontStyle: 'italic' }}>Schreibt...</div>}
