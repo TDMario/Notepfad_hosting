@@ -2,9 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 
 import { API_BASE_URL as API_URL } from '../config';
 
-const ChatBot = ({ studentId }) => {
+const ChatBot = ({ studentId, userRole }) => {
+    const isParent = userRole === 'parent';
+    const initMsg = isParent
+        ? 'Willkommen! Ich helfe Ihnen, die schulische Entwicklung Ihres Kindes zu verstehen. 🤝'
+        : 'Hallo! Ich bin dein Lern-Coach. Wie kann ich dir heute helfen? 🤖';
+
     const [messages, setMessages] = useState([
-        { sender: 'bot', text: 'Hallo! Ich bin dein Lern-Coach. Wie kann ich dir heute helfen? 🤖' }
+        { sender: 'bot', text: initMsg }
     ]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -55,7 +60,7 @@ const ChatBot = ({ studentId }) => {
     return (
         <div className="container animate-fade-in" style={{ paddingBottom: '90px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
             <div className="card" style={{ marginBottom: '1rem' }}>
-                <h2>Lern-Coach AI 🧠</h2>
+                <h2>{isParent ? 'Lern-Begleiter für Eltern 🤝' : 'Lern-Coach AI 🧠'}</h2>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '1rem', paddingRight: '5px' }}>
