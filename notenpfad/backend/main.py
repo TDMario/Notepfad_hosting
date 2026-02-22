@@ -258,11 +258,7 @@ def startup_event():
         }
 
         for sub_name, topics in default_data.items():
-            # Ensure Subject
-            # Check if this subject exists for global admin/template usage? 
-            # Or just check if *any* exists? 
-            # For startup seeding, let's assign them to the admin user we just fetched/created.
-            
+          
             subject = db.query(models.Subject).filter(
                 models.Subject.name == sub_name, 
                 models.Subject.owner_id == admin.id
@@ -686,8 +682,16 @@ def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(
     return db_grade
 
 @app.get("/grades/", response_model=List[Grade])
-def read_grades(student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    # Auto-resolve student_id if not provided (e.g., when frontend sends null)
+def read_grades(student_id: Optional[str] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auto-resolve student_id if not provided (e.g., when frontend sends null string)
+    if student_id in ("null", "undefined", ""):
+        student_id = None
+    elif student_id is not None:
+        try:
+            student_id = int(student_id)
+        except ValueError:
+            student_id = None
+            
     if student_id is None:
          if current_user.role == "student" and current_user.student_profile:
               student_id = current_user.student_profile.id
@@ -741,7 +745,16 @@ def delete_grade(grade_id: int, db: Session = Depends(get_db), current_user: mod
     return {"message": "Grade deleted"}
 
 @app.get("/average/")
-def calculate_average(student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def calculate_average(student_id: Optional[str] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Parse string nulls from frontend
+    if student_id in ("null", "undefined", ""):
+        student_id = None
+    elif student_id is not None:
+        try:
+            student_id = int(student_id)
+        except ValueError:
+            student_id = None
+
     # Auto-resolve student_id
     if student_id is None:
          if current_user.role == "student" and current_user.student_profile:
@@ -941,7 +954,16 @@ class PredictionRequest(BaseModel):
     next_exam_weight: float = 1.0
 
 @app.post("/prediction")
-def predict_grade(request: PredictionRequest, student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def predict_grade(request: PredictionRequest, student_id: Optional[str] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Parse string nulls from frontend
+    if student_id in ("null", "undefined", ""):
+        student_id = None
+    elif student_id is not None:
+        try:
+            student_id = int(student_id)
+        except ValueError:
+            student_id = None
+
     # Auto-resolve student_id
     if student_id is None:
          if current_user.role == "student" and current_user.student_profile:
@@ -1030,13 +1052,7 @@ def get_student_context(student_id: int, db: Session):
     
     # Fetch Topics
     topics = db.query(models.Topic).join(models.Subject).all() # This fetches all topics, filter by student?
-    # Topics are global definitions, but completion is specific? 
-    # Wait, models.Topic has 'is_completed' column.
-    # Checking models.py: Topic.is_completed is an Integer column on the Topic table itself.
-    # This implies Topics are NOT per student currently in this simple schema, but shared/global state 
-    # OR the schema meant for single user demo. 
-    # Given the 'reset' endpoint resets all topics, it seems topics are shared or single-instance.
-    # We will just list them as is.
+
     
     topic_context = []
     for t in topics:
@@ -1079,9 +1095,7 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
             target_student_id = current_user.student_profile.id
             
     if not target_student_id:
-        # If we can't context, just chat generically or error?
-        # Let's try to proceed with generic chat but warn or just generic.
-        pass
+         pass
 
     # 2. Build Context
     context = ""
