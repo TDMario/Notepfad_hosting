@@ -193,6 +193,22 @@ def health_check():
 def startup_event():
     db = database.SessionLocal()
     print("--- STARTUP SEEDING CHECK ---", flush=True)
+    
+    # --- Auto Migration for created_at ---
+    from sqlalchemy.engine import reflection
+    from sqlalchemy import text
+    try:
+        inspector = reflection.Inspector.from_engine(database.engine)
+        columns = [col['name'] for col in inspector.get_columns("users")]
+        if "created_at" not in columns:
+            print("Auto-migration: Adding 'created_at' to users table...", flush=True)
+            with database.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+                print("Auto-migration successful.", flush=True)
+    except Exception as e:
+        print(f"Auto-migration failed (this is usually fine for sqlite locally): {e}", flush=True)
+    # -------------------------------------
+
     try:
         # 1. Create Admin (Parent)
         admin = db.query(models.User).filter(models.User.username == "admin").first()
