@@ -686,13 +686,26 @@ def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(
     return db_grade
 
 @app.get("/grades/", response_model=List[Grade])
-def read_grades(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def read_grades(student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auto-resolve student_id if not provided (e.g., when frontend sends null)
+    if student_id is None:
+         if current_user.role == "student" and current_user.student_profile:
+              student_id = current_user.student_profile.id
+         elif current_user.role == "parent":
+              first_child = db.query(models.User).filter(models.User.parent_id == current_user.id).first()
+              if first_child:
+                  profile = db.query(models.Student).filter(models.Student.user_id == first_child.id).first()
+                  if profile:
+                      student_id = profile.id
+                      
+    if not student_id:
+         # Still no student found/provided
+         return []
+
     # Auth Check
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
     if not student:
-        # If no student found, return empty or 404. 
-        # But we should check auth first if possible.
-        pass
+        return []
 
     # Simplified Auth Check similar to create_grade
     if current_user.role == "student":
@@ -728,9 +741,25 @@ def delete_grade(grade_id: int, db: Session = Depends(get_db), current_user: mod
     return {"message": "Grade deleted"}
 
 @app.get("/average/")
-def calculate_average(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-     # Auth Check (Same as read_grades)
+def calculate_average(student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auto-resolve student_id
+    if student_id is None:
+         if current_user.role == "student" and current_user.student_profile:
+              student_id = current_user.student_profile.id
+         elif current_user.role == "parent":
+              first_child = db.query(models.User).filter(models.User.parent_id == current_user.id).first()
+              if first_child:
+                  profile = db.query(models.Student).filter(models.Student.user_id == first_child.id).first()
+                  if profile:
+                      student_id = profile.id
+    
+    if not student_id:
+        return {"average": None, "details": {}, "passed": False}
+        
+    # Auth Check (Same as read_grades)
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        return {"average": None, "details": {}, "passed": False}
     
     if current_user.role == "student":
         if current_user.student_profile and current_user.student_profile.id != student_id:
@@ -912,9 +941,25 @@ class PredictionRequest(BaseModel):
     next_exam_weight: float = 1.0
 
 @app.post("/prediction")
-def predict_grade(request: PredictionRequest, student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def predict_grade(request: PredictionRequest, student_id: Optional[int] = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Auto-resolve student_id
+    if student_id is None:
+         if current_user.role == "student" and current_user.student_profile:
+              student_id = current_user.student_profile.id
+         elif current_user.role == "parent":
+              first_child = db.query(models.User).filter(models.User.parent_id == current_user.id).first()
+              if first_child:
+                  profile = db.query(models.Student).filter(models.Student.user_id == first_child.id).first()
+                  if profile:
+                      student_id = profile.id
+                      
+    if not student_id:
+        return {"required_grade": request.target_average, "message": "No student found"}
+
     # Auth Check (Same as read_grades)
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        return {"required_grade": request.target_average, "message": "No student found"}
     
     if current_user.role == "student":
         if current_user.student_profile and current_user.student_profile.id != student_id:
