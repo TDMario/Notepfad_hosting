@@ -24,3 +24,4 @@ gunicorn
 psycopg2-binary
 PyJWT==2.10.1
 openai
+slowapi==0.1.9

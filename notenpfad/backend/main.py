@@ -1,16 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime, timedelta
 import bcrypt
 import models, database
 import os
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import jwt
 from jwt.exceptions import InvalidTokenError
-from datetime import datetime, timedelta
 import openai
 
 models.Base.metadata.create_all(bind=database.engine)
@@ -22,6 +21,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 import random
 import string
 import secrets
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32)) # Random secure fallback
@@ -29,6 +33,8 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours
 
 app = FastAPI(title="Notenpfad API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,10 +95,15 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     return user
 
 # --- Pydantic Schemas ---
+
+# Basic regex for names/text to prevent HTML/Script tags
+# Allows letters (all languages), numbers, spaces, and basic punctuation (-_.,!?)
+SAFE_TEXT_REGEX = r'^[\w\s\-\.\,\!\?üöäÜÖÄéèêâàç]+$'
+
 class GradeBase(BaseModel):
-    value: float
+    value: float = Field(ge=1.0, le=6.0, description="Grade between 1.0 and 6.0")
     subject_id: int
-    type: str = "Exam"
+    type: str = Field("Exam", pattern=SAFE_TEXT_REGEX, max_length=50)
     date: date
 
 class GradeCreate(GradeBase):
@@ -105,23 +116,23 @@ class Grade(GradeBase):
         orm_mode = True
 
 class UserBase(BaseModel):
-    username: str
+    username: str = Field(..., pattern=r'^[a-zA-Z0-9_\-\.]+$', min_length=3, max_length=50, description="Alphanumeric username")
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=4)
 
 class UserStudentCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=4)
 
 class UserLogin(UserBase):
     password: str
 
 class UserPasswordUpdate(BaseModel):
-    password: str
+    password: str = Field(..., min_length=4)
 
 class ChildCreate(UserBase):
-    password: str
-    name: str
+    password: str = Field(..., min_length=4)
+    name: str = Field(..., pattern=SAFE_TEXT_REGEX, min_length=2, max_length=100)
     parent_id: int
 
 class UserOut(UserBase):
@@ -142,11 +153,11 @@ class StudentOut(BaseModel):
     id: int
     name: str
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class SubjectBase(BaseModel):
-    name: str
-    weighting: float = 1.0
+    name: str = Field(..., pattern=SAFE_TEXT_REGEX, min_length=2, max_length=100)
+    weighting: float = Field(1.0, ge=0.0, le=10.0)
 
 class SubjectCreate(SubjectBase):
     pass
@@ -305,7 +316,8 @@ def debug_db_status(db: Session = Depends(get_db), current_user: models.User = D
         return {"status": "error", "detail": str(e)}
 
 @app.post("/register", response_model=UserOut)
-def register(user: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -318,7 +330,8 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 @app.post("/users/student", response_model=UserOut)
-def create_student(user: UserStudentCreate, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def create_student(request: Request, user: UserStudentCreate, db: Session = Depends(get_db)):
     # In a real app, we'd check if current_user.role == 'parent'
     # For now, we assume access to this endpoint implies permission (simpler)
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
@@ -333,7 +346,8 @@ def create_student(user: UserStudentCreate, db: Session = Depends(get_db)):
     return new_user
 
 @app.post("/login", response_model=Token)
-def login(user: UserLogin, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
@@ -359,11 +373,56 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
         "student_id": student_id
     }
 
+def cleanup_old_guests():
+    """Background task to delete guest accounts older than 24 hours."""
+    db = database.SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        print(f"--- RUNNING GUEST CLEANUP: Deleting guests older than {cutoff} ---")
+        
+        # Find old guest parents
+        old_guests = db.query(models.User).filter(
+            models.User.username.like("guest_%"),
+            models.User.created_at < cutoff
+        ).all()
+        
+        for guest in old_guests:
+            print(f"Cleaning up guest: {guest.username} (Created: {guest.created_at})")
+            # 1. Delete associated subjects, topics, and grades
+            subjects = db.query(models.Subject).filter(models.Subject.owner_id == guest.id).all()
+            for subject in subjects:
+                db.query(models.Topic).filter(models.Topic.subject_id == subject.id).delete()
+                db.query(models.Grade).filter(models.Grade.subject_id == subject.id).delete()
+                db.delete(subject)
+            
+            # 2. Delete children and their student profiles/grades
+            children = db.query(models.User).filter(models.User.parent_id == guest.id).all()
+            for child in children:
+                student = db.query(models.Student).filter(models.Student.user_id == child.id).first()
+                if student:
+                    db.query(models.Grade).filter(models.Grade.student_id == student.id).delete()
+                    db.delete(student)
+                db.delete(child)
+            
+            # 3. Delete the guest parent
+            db.delete(guest)
+            
+        db.commit()
+    except Exception as e:
+        print(f"Error during guest cleanup: {e}")
+    finally:
+        db.close()
+
+
 @app.post("/guest-login", response_model=Token)
-def guest_login(db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def guest_login(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Creates a temporary guest account with seeded data and logs in immediately.
     """
+    # Trigger cleanup of old accounts in the background
+    background_tasks.add_task(cleanup_old_guests)
+    
     # 1. Create unique guest user
     suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
     username = f"guest_{suffix}"
@@ -446,7 +505,8 @@ def guest_login(db: Session = Depends(get_db)):
     }
 
 @app.post("/users/children", response_model=UserOut)
-def create_child(child: ChildCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def create_child(request: Request, child: ChildCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # Check parent exists (using current_user for security)
     if current_user.id != child.parent_id and current_user.role != 'admin':
          # Allow admins or the parent themselves
@@ -591,8 +651,19 @@ def create_grade(grade: GradeCreate, student_id: int = 1, db: Session = Depends(
          child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
          if not child_user or child_user.parent_id != current_user.id:
               raise HTTPException(status_code=403, detail="Not authorized to add grades for this student")
+
+    # Validate that the subject exists and belongs to the correct owner
+    subject = db.query(models.Subject).filter(models.Subject.id == grade.subject_id).first()
+    if not subject:
+         raise HTTPException(status_code=404, detail="Subject not found")
+         
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+    if subject.owner_id != owner_id and current_user.role != 'admin':
+         raise HTTPException(status_code=403, detail="Not authorized to use this subject")
     
-    db_grade = models.Grade(**grade.dict(), student_id=student_id)
+    db_grade = models.Grade(**grade.model_dump(), student_id=student_id) if hasattr(grade, "model_dump") else models.Grade(**grade.dict(), student_id=student_id)
     db.add(db_grade)
     db.commit()
     db.refresh(db_grade)
@@ -743,7 +814,7 @@ def calculate_average(student_id: int = 1, db: Session = Depends(get_db), curren
     }
 
 @app.post("/analyze-exam")
-def analyze_exam():
+def analyze_exam(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # Mock Response
     return {
         "grade": 5.0,
@@ -754,7 +825,7 @@ def analyze_exam():
 # --- Topic Endpoints ---
 
 class TopicBase(BaseModel):
-    name: str
+    name: str = Field(..., pattern=SAFE_TEXT_REGEX, min_length=2, max_length=100)
     is_completed: bool = False
 
 class TopicCreate(TopicBase):
@@ -768,6 +839,16 @@ class Topic(TopicBase):
 
 @app.post("/topics/", response_model=Topic)
 def create_topic(topic: TopicCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+        
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+    if subject.owner_id != owner_id and current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Not authorized to add topics to this subject")
+
     db_topic = models.Topic(name=topic.name, is_completed=topic.is_completed, subject_id=topic.subject_id)
     db.add(db_topic)
     db.commit()
