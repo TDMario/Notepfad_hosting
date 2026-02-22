@@ -364,6 +364,10 @@ def login(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     if not db_user or not verify_password(user.password, db_user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
+    # Block manual login for guest accounts and their children
+    if db_user.username.startswith("guest_"):
+        raise HTTPException(status_code=403, detail="Gast-Konten können sich hier nicht anmelden. Bitte nutzen Sie den Demo-Modus.")
+    
     # Return role in login response
     # Find linked student_id if applicable
     student_id = None
@@ -528,12 +532,17 @@ def create_child(request: Request, child: ChildCreate, db: Session = Depends(get
     if not parent:
         raise HTTPException(status_code=404, detail="Parent not found")
         
+    # Guest protection: Prefix child username to prevent squatting
+    actual_username = child.username
+    if current_user.username.startswith("guest_"):
+        actual_username = f"{current_user.username}_{child.username}"[:50]
+        
     # Check username
-    if db.query(models.User).filter(models.User.username == child.username).first():
+    if db.query(models.User).filter(models.User.username == actual_username).first():
         raise HTTPException(status_code=400, detail="Username taken")
         
     hashed = get_password_hash(child.password)
-    new_user = models.User(username=child.username, password_hash=hashed, role="student", parent_id=child.parent_id)
+    new_user = models.User(username=actual_username, password_hash=hashed, role="student", parent_id=child.parent_id)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
