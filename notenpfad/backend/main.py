@@ -361,12 +361,13 @@ def create_student(request: Request, user: UserStudentCreate, db: Session = Depe
 @limiter.limit("10/minute")
 def login(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
+    
+    # Block manual login for guest accounts and their children BEFORE password check
+    if db_user and db_user.username.startswith("guest_"):
+        raise HTTPException(status_code=403, detail="Gast-Konten können sich hier nicht anmelden. Bitte nutzen Sie den Demo-Modus.")
+        
     if not db_user or not verify_password(user.password, db_user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
-    
-    # Block manual login for guest accounts and their children
-    if db_user.username.startswith("guest_"):
-        raise HTTPException(status_code=403, detail="Gast-Konten können sich hier nicht anmelden. Bitte nutzen Sie den Demo-Modus.")
     
     # Return role in login response
     # Find linked student_id if applicable
