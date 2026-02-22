@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date
-from passlib.context import CryptContext
+import bcrypt
 import models, database
 import os
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from datetime import datetime, timedelta
 import openai
 
@@ -16,7 +17,6 @@ models.Base.metadata.create_all(bind=database.engine)
 
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 import random
@@ -24,7 +24,7 @@ import string
 import secrets
 
 # JWT Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-me") # In production, use a secure key!
+SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32)) # Random secure fallback
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours
 
@@ -46,11 +46,17 @@ def get_db():
     finally:
         db.close()
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+def verify_password(plain_password: str, hashed_password: str):
+    if isinstance(hashed_password, str):
+        hashed_password = hashed_password.encode('utf-8')
+    if isinstance(plain_password, str):
+        plain_password = plain_password.encode('utf-8')
+    return bcrypt.checkpw(plain_password, hashed_password)
 
-def get_password_hash(password):
-    return pwd_context.hash(password)
+def get_password_hash(password: str):
+    if isinstance(password, str):
+        password = password.encode('utf-8')
+    return bcrypt.hashpw(password, bcrypt.gensalt()).decode('utf-8')
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -74,7 +80,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-    except JWTError:
+    except InvalidTokenError:
         raise credentials_exception
     
     user = db.query(models.User).filter(models.User.username == username).first()
@@ -181,7 +187,9 @@ def startup_event():
         admin = db.query(models.User).filter(models.User.username == "admin").first()
         if not admin:
             print("Creating default admin user...", flush=True)
-            hashed_password = get_password_hash(os.getenv("ADMIN_PASSWORD", "1234"))
+            admin_pw = os.getenv("ADMIN_PASSWORD", secrets.token_urlsafe(8))
+            print(f"Admin Password is: {admin_pw} (SAVE THIS!)", flush=True)
+            hashed_password = get_password_hash(admin_pw)
             admin = models.User(username="admin", password_hash=hashed_password, role="parent")
             db.add(admin)
             db.commit()
@@ -194,7 +202,9 @@ def startup_event():
         sole = db.query(models.User).filter(models.User.username == "sole").first()
         if not sole:
             print("Creating default student user: sole...", flush=True)
-            hashed_sole_pw = get_password_hash(os.getenv("STUDENT_PASSWORD", "sun26"))
+            sole_pw = os.getenv("STUDENT_PASSWORD", secrets.token_urlsafe(8))
+            print(f"Student 'sole' Password is: {sole_pw} (SAVE THIS!)", flush=True)
+            hashed_sole_pw = get_password_hash(sole_pw)
             sole = models.User(username="sole", password_hash=hashed_sole_pw, role="student", parent_id=admin.id)
             db.add(sole)
             db.commit()
@@ -261,8 +271,10 @@ def startup_event():
         db.close()
 
 @app.get("/debug/db-status")
-def debug_db_status(db: Session = Depends(get_db)):
+def debug_db_status(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Debug endpoint to check DB content state"""
+    if current_user.username != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         user_count = db.query(models.User).count()
         student_count = db.query(models.Student).count()
@@ -614,6 +626,16 @@ def delete_grade(grade_id: int, db: Session = Depends(get_db), current_user: mod
     if not grade:
         raise HTTPException(status_code=404, detail="Grade not found")
     
+    student = db.query(models.Student).filter(models.Student.id == grade.student_id).first()
+    if student:
+        if current_user.role == "student":
+            if current_user.student_profile and current_user.student_profile.id != student.id:
+                raise HTTPException(status_code=403, detail="Cannot delete grades for other students")
+        if current_user.role == "parent":
+            child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+            if not child_user or child_user.parent_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Not authorized to delete grades for this student")
+                
     db.delete(grade)
     db.commit()
     return {"message": "Grade deleted"}
@@ -758,13 +780,31 @@ def toggle_topic(topic_id: int, db: Session = Depends(get_db), current_user: mod
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     
+    subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
+    if subject:
+        owner_id = current_user.id
+        if current_user.role == "student" and current_user.parent_id:
+            owner_id = current_user.parent_id
+        if subject.owner_id != owner_id and current_user.role != 'admin':
+            raise HTTPException(status_code=403, detail="Not authorized to toggle this topic")
+            
     topic.is_completed = not topic.is_completed
     db.commit()
     db.refresh(topic)
     return topic
 
 @app.get("/subjects/{subject_id}/topics", response_model=List[Topic])
-def read_topics(subject_id: int, db: Session = Depends(get_db)):
+def read_topics(subject_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+    if subject.owner_id != owner_id and current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
     topics = db.query(models.Topic).filter(models.Topic.subject_id == subject_id).all()
     return topics
 
@@ -1013,15 +1053,34 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
 
 @app.post("/reset")
 def reset_demo(student_id: int = 1, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    # Only admin/parent can reset? For now, open but authenticated
+    # Validate ownership of the student
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+        
+    if current_user.role == "student":
+        if current_user.student_profile and current_user.student_profile.id != student_id:
+             raise HTTPException(status_code=403, detail="Cannot reset data for other students")
     
+    if current_user.role == "parent":
+         child_user = db.query(models.User).filter(models.User.id == student.user_id).first()
+         if not child_user or child_user.parent_id != current_user.id:
+              raise HTTPException(status_code=403, detail="Not authorized to reset data for this student")
+              
+    owner_id = current_user.id
+    if current_user.role == "student" and current_user.parent_id:
+        owner_id = current_user.parent_id
+        
     # Delete all grades for student
     db.query(models.Grade).filter(models.Grade.student_id == student_id).delete()
     
-    # Reset all topics to not completed
-    topics = db.query(models.Topic).all()
-    for t in topics:
-        t.is_completed = 0
+    # Reset all topics to not completed ONLY for subjects owned by this user/parent
+    subjects = db.query(models.Subject).filter(models.Subject.owner_id == owner_id).all()
+    subject_ids = [s.id for s in subjects]
+    if subject_ids:
+        topics = db.query(models.Topic).filter(models.Topic.subject_id.in_(subject_ids)).all()
+        for t in topics:
+            t.is_completed = 0
     
     db.commit()
     return {"message": "Demo reset successful"}
