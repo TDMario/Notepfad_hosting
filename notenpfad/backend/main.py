@@ -491,8 +491,11 @@ def guest_login(request: Request, background_tasks: BackgroundTasks, db: Session
         # Add a few grades
         for _ in range(random.randint(2, 4)):
             val = round(random.uniform(3.5, 6.0), 1)
-            # 50% chance of 'Prüfung' or 'Vornote'
-            g_type = random.choice(["Prüfung", "Vornote", "Test"])
+            # Use more realistic exam types for the specific subjects
+            if sub_name == "Deutsch":
+                g_type = random.choice(["Vornote", "Aufsatz", "Sprachbetrachtung", "Test"])
+            else:
+                g_type = random.choice(["Prüfung", "Vornote", "Test"])
             
             grade = models.Grade(
                 value=val,
@@ -807,9 +810,9 @@ def calculate_average(student_id: Optional[str] = None, db: Session = Depends(ge
         return sum(values) / len(values) if values else None
 
     # Vornote / Schulprüfung: 50% Deutsch, 50% Math
-    # Support both old "Vornote" and new "Schulprüfung" tags
-    math_vornote_grades = get_grades("Mathematik", ["Vornote", "Schulprüfung"])
-    deutsch_vornote_grades = get_grades("Deutsch", ["Vornote", "Schulprüfung"])
+    # Support both old "Vornote", new "Schulprüfung", and generic "Test"
+    math_vornote_grades = get_grades("Mathematik", ["Vornote", "Schulprüfung", "Test"])
+    deutsch_vornote_grades = get_grades("Deutsch", ["Vornote", "Schulprüfung", "Test"])
     
     math_vornote = avg(math_vornote_grades)
     deutsch_vornote = avg(deutsch_vornote_grades)
@@ -831,10 +834,13 @@ def calculate_average(student_id: Optional[str] = None, db: Session = Depends(ge
     
     deutsch_aufsatz = avg(get_grades("Deutsch", ["Aufsatz", "Aufsatz (Prüfung)", "Aufsatz (Gymiprüfung)"]))
     deutsch_sprach = avg(get_grades("Deutsch", ["Sprachbetrachtung", "Sprachbetrachtung (Prüfung)", "Sprachbetrachtung (Gymiprüfung)"]))
+    deutsch_generic_exam = avg(get_grades("Deutsch", ["Prüfung", "Gymiprüfung"]))
     
     deutsch_exam = None
     if deutsch_aufsatz is not None and deutsch_sprach is not None:
         deutsch_exam = (deutsch_aufsatz + deutsch_sprach) / 2
+    elif deutsch_generic_exam is not None:
+        deutsch_exam = deutsch_generic_exam
     elif deutsch_aufsatz is not None: 
          deutsch_exam = deutsch_aufsatz # Fallback if incomplete
     elif deutsch_sprach is not None:
