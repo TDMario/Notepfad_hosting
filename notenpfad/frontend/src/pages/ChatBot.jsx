@@ -82,17 +82,26 @@ const ChatBot = ({ studentId, userRole }) => {
             <div className="card" style={{ marginBottom: '1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                     <h2 style={{ margin: 0 }}>{isParent ? 'Lern-Begleiter für Eltern 🤝' : 'Lern-Coach AI 🧠'}</h2>
-                    <select
-                        value={emotionMode}
-                        onChange={(e) => setEmotionMode(e.target.value)}
-                        style={{ padding: '8px 12px', borderRadius: '12px', border: '1px solid var(--color-border)', outline: 'none', background: 'var(--color-bg)', color: 'var(--color-text)', cursor: 'pointer', fontWeight: 500 }}
-                    >
-                        <option value="motivating">✨ Sehr Motivierend</option>
-                        <option value="mildly_motivating">🌟 Motivierend</option>
-                        <option value="balanced">⚖️ Ausgewogen</option>
-                        <option value="mildly_strict">📚 Streng</option>
-                        <option value="strict">📏 Sehr Streng</option>
-                    </select>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <select
+                            value={emotionMode}
+                            onChange={(e) => setEmotionMode(e.target.value)}
+                            style={{ padding: '8px 12px', borderRadius: '12px', border: '1px solid var(--color-border)', outline: 'none', background: 'var(--color-bg)', color: 'var(--color-text)', cursor: 'pointer', fontWeight: 500 }}
+                        >
+                            <option value="motivating">✨ Sehr Motivierend</option>
+                            <option value="mildly_motivating">🌟 Motivierend</option>
+                            <option value="balanced">⚖️ Ausgewogen</option>
+                            <option value="mildly_strict">📚 Streng</option>
+                            <option value="strict">📏 Sehr Streng</option>
+                        </select>
+                        <button
+                            onClick={() => setMessages([{ sender: 'bot', text: initMsg }])}
+                            style={{ padding: '8px 12px', borderRadius: '12px', border: 'none', outline: 'none', background: '#ffebee', color: '#d32f2f', cursor: 'pointer', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '5px' }}
+                            title="Chatverlauf löschen"
+                        >
+                            🗑️ Neu
+                        </button>
+                    </div>
                 </div>
             </div>
 
