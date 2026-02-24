@@ -1122,7 +1122,9 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     # 2. Build Context
     context = ""
     
-    if current_user.role == "parent":
+    is_acting_as_parent = current_user.role == "parent" and not target_student_id
+    
+    if is_acting_as_parent:
         # Parent Context: Fetch ALL children
         children_users = db.query(models.User).filter(models.User.parent_id == current_user.id).all()
         
@@ -1139,12 +1141,6 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
                     context_parts.append(f"--- Child: {student_profile.name} (ID: {student_profile.id}) ---\n{child_context}")
             
             context = "Here is the data for your children:\n\n" + "\n\n".join(context_parts)
-            
-            if target_student_id:
-                # If a specific child was selected, mention it
-                selected_student = db.query(models.Student).filter(models.Student.id == target_student_id).first()
-                if selected_student:
-                    context = f"CURRENTLY VIEWING: {selected_student.name}\n\n" + context
     
     elif target_student_id:
         # Student Context (Single)
@@ -1179,7 +1175,7 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     - Motivate the student for this specific high-stakes goal.
     """
 
-    if current_user.role == "parent":
+    if is_acting_as_parent:
         base_parent_prompt = "You are a helpful education advisor for a parent.\nYour goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions to help the child pass the Gymnasium Entrance Exam."
         
         if request.emotion_mode == "motivating":
