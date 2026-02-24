@@ -1036,9 +1036,15 @@ def predict_grade(request: PredictionRequest, student_id: Optional[str] = None, 
 
 # --- AI Chat Endpoint ---
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
 class ChatRequest(BaseModel):
     message: str
     student_id: Optional[int] = None
+    emotion_mode: str = "balanced"
+    history: List[ChatMessage] = []
 
 def get_student_context(student_id: int, db: Session):
     """
@@ -1168,8 +1174,20 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
     """
 
     if current_user.role == "parent":
-        system_prompt = f"""You are a helpful education advisor for a parent.
-        Your goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions to help the child pass the Gymnasium Entrance Exam.
+        base_parent_prompt = "You are a helpful education advisor for a parent.\nYour goal is to help the parent understand their child's progress, interpret grades, and suggest supportive actions to help the child pass the Gymnasium Entrance Exam."
+        
+        if request.emotion_mode == "motivating":
+            emotion_instruction = "Be extremely encouraging, praising, and motivating. Focus heavily on strengths and celebrate progress enthusiastically."
+        elif request.emotion_mode == "mildly_motivating":
+            emotion_instruction = "Be motivating and supportive. Acknowledge their efforts positively while staying focused on the goals."
+        elif request.emotion_mode == "strict":
+            emotion_instruction = "Be very strict, demanding, and highly facts-oriented. Emphasize exactly what needs to be done flawlessly, with no sugar-coating."
+        elif request.emotion_mode == "mildly_strict":
+            emotion_instruction = "Be somewhat strict and focused on discipline. Set clear boundaries and expectations, pointing out areas for improvement directly."
+        else:
+            emotion_instruction = "Be professional, balanced, and empathetic. Provide supportive but realistic feedback."
+
+        system_prompt = f"""{base_parent_prompt}
         
         {grading_system_context}
         {gym_exam_context}
@@ -1180,15 +1198,27 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
         
         Instructions:
         - Address the user as the parent.
-        - Be professional but empathetic.
-        - Analyze the grades objectively (e.g., "The math grades have improved...").
+        - {emotion_instruction}
+        - Analyze the grades objectively.
         - Suggest specific topics the parent can help the child review based on the topic status.
         - Do not address the child directly; address the parent about the child.
         """
     else:
         # Default to student "Lern-Coach"
-        system_prompt = f"""You are a helpful, encouraging learning coach for a student.
-        Your goal is to help them learn, reflect on their grades, and prepare for the Gymnasium Entrance Exam.
+        base_student_prompt = "You are a helpful learning coach for a student.\nYour goal is to help them learn, reflect on their grades, and prepare for the Gymnasium Entrance Exam."
+        
+        if request.emotion_mode == "motivating":
+            emotion_instruction = "Be super enthusiastic, friendly, and highly motivating! Celebrate their efforts and make them feel great about learning."
+        elif request.emotion_mode == "mildly_motivating":
+            emotion_instruction = "Be friendly, motivating, and encouraging. Highlight their progress and keep them engaged."
+        elif request.emotion_mode == "strict":
+            emotion_instruction = "Be very strict, clear, and demanding. Expect high standards and focus heavily on discipline and exact results without playful language."
+        elif request.emotion_mode == "mildly_strict":
+            emotion_instruction = "Be serious and focused. Guide them clearly and firmly without being overly harsh, but make sure they understand expectations."
+        else:
+            emotion_instruction = "Be friendly, balanced, and age-appropriate. Encourage them while keeping a focus on their learning goals."
+
+        system_prompt = f"""{base_student_prompt}
         
         {grading_system_context}
         {gym_exam_context}
@@ -1198,18 +1228,22 @@ def chat_bot(request: ChatRequest, db: Session = Depends(get_db), current_user: 
         {context}
         
         Instructions:
-        - Be friendly and age-appropriate (for school kids).
+        - {emotion_instruction}
         - Use the grades context to give specific advice (e.g. "Math looks great, but let's practice German").
         - Do NOT give direct answers to homework questions, but guide them.
         """
     
     try:
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in request.history:
+            if msg.role in ["user", "assistant"]:
+                messages.append({"role": msg.role, "content": msg.content})
+                
+        messages.append({"role": "user", "content": request.message})
+        
         completion = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.message}
-            ]
+            messages=messages
         )
         return {"response": completion.choices[0].message.content}
     except Exception as e:

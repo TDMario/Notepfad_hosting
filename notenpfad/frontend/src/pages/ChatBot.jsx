@@ -13,6 +13,7 @@ const ChatBot = ({ studentId, userRole }) => {
     ]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [emotionMode, setEmotionMode] = useState('balanced');
     const messagesEndRef = useRef(null);
 
     const scrollToBottom = () => {
@@ -41,6 +42,13 @@ const ChatBot = ({ studentId, userRole }) => {
 
         try {
             const token = localStorage.getItem('access_token');
+            const history = messages
+                .filter(msg => msg.text !== initMsg)
+                .map(msg => ({
+                    role: msg.sender === 'user' ? 'user' : 'assistant',
+                    content: msg.text
+                }));
+
             const res = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: {
@@ -49,7 +57,9 @@ const ChatBot = ({ studentId, userRole }) => {
                 },
                 body: JSON.stringify({
                     message: input,
-                    student_id: studentId
+                    student_id: studentId,
+                    emotion_mode: emotionMode,
+                    history: history
                 })
             });
             const data = await res.json();
@@ -70,7 +80,20 @@ const ChatBot = ({ studentId, userRole }) => {
     return (
         <div className="container animate-fade-in" style={{ paddingBottom: '90px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
             <div className="card" style={{ marginBottom: '1rem' }}>
-                <h2>{isParent ? 'Lern-Begleiter für Eltern 🤝' : 'Lern-Coach AI 🧠'}</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                    <h2 style={{ margin: 0 }}>{isParent ? 'Lern-Begleiter für Eltern 🤝' : 'Lern-Coach AI 🧠'}</h2>
+                    <select
+                        value={emotionMode}
+                        onChange={(e) => setEmotionMode(e.target.value)}
+                        style={{ padding: '8px 12px', borderRadius: '12px', border: '1px solid var(--color-border)', outline: 'none', background: 'var(--color-bg)', color: 'var(--color-text)', cursor: 'pointer', fontWeight: 500 }}
+                    >
+                        <option value="motivating">✨ Sehr Motivierend</option>
+                        <option value="mildly_motivating">🌟 Motivierend</option>
+                        <option value="balanced">⚖️ Ausgewogen</option>
+                        <option value="mildly_strict">📚 Streng</option>
+                        <option value="strict">📏 Sehr Streng</option>
+                    </select>
+                </div>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '1rem', paddingRight: '5px' }}>
