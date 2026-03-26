@@ -13,7 +13,8 @@ const Login = ({ onLogin }) => {
         e.preventDefault();
         setError('');
 
-        if (isRegistering && accessCode !== '9999') {
+        const correctAccessCode = import.meta.env.VITE_ACCESS_CODE || '9999';
+        if (isRegistering && accessCode !== correctAccessCode) {
             setError('Invalid access code. Account creation restricted.');
             return;
         }
